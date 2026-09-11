@@ -21,6 +21,10 @@ the printer the same BJL status query and decodes the whole reply itself.
 
 ![tray](docs/tray-icon.png)
 
+Hovering the icon shows the same information as the viewer, in a compact tooltip:
+
+![tooltip](docs/tooltip.png)
+
 ## Install
 
     ./install.sh

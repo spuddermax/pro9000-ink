@@ -50,7 +50,7 @@ class Swatch(Gtk.DrawingArea):
         super().__init__(); self.rgb = rgb; self.set_size_request(16, 16); self.connect("draw", self.draw)
     def draw(self, w, cr):
         a = w.get_allocation(); cr.arc(a.width/2, a.height/2, 6, 0, 6.2832); cr.set_source_rgb(*self.rgb); cr.fill()
-        cr.arc(a.width/2, a.height/2, 6, 0, 6.2832); cr.set_source_rgba(1,1,1,0.45); cr.set_line_width(1); cr.stroke()
+        cr.arc(a.width/2, a.height/2, 6, 0, 6.2832); cr.set_source_rgba(0,0,0,0.22); cr.set_line_width(1); cr.stroke()
 
 class Bar(Gtk.DrawingArea):
     def __init__(self, rgb, level):
@@ -59,13 +59,14 @@ class Bar(Gtk.DrawingArea):
         cr.new_sub_path(); cr.arc(x+w-r, y+r, r, -1.5708, 0); cr.arc(x+w-r, y+h-r, r, 0, 1.5708)
         cr.arc(x+r, y+h-r, r, 1.5708, 3.1416); cr.arc(x+r, y+r, r, 3.1416, 4.7124); cr.close_path()
     def draw(self, w, cr):
-        a = w.get_allocation(); self.rr(cr, 0, 2, a.width, 9, 4.5); cr.set_source_rgba(0.5,0.5,0.5,0.28); cr.fill()
+        a = w.get_allocation(); h = 9; y = (a.height - h) / 2.0
+        self.rr(cr, 0, y, a.width, h, h/2); cr.set_source_rgb(0.88,0.88,0.87); cr.fill()
         fw = a.width * max(self.level,0) / 100.0
-        if fw > 0: self.rr(cr, 0, 2, max(fw, 9), 9, 4.5); cr.set_source_rgb(*self.rgb); cr.fill()
+        if fw > 0: self.rr(cr, 0, y, max(fw, h), h, h/2); cr.set_source_rgb(*self.rgb); cr.fill()
 
 def tooltip_widget(tanks, when, err=None):
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=6)
-    title = Gtk.Label(xalign=0); title.set_markup("<b>Pro9000 Mark II ink</b>" + (f"  <small>read {when}</small>" if when else "")); box.add(title)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=6); box.get_style_context().add_class("inktip")
+    title = Gtk.Label(xalign=0); title.set_markup("<b>Pro9000 Mark II ink</b>" + (f"  <small><span foreground='#6b6b6b'>read {when}</span></small>" if when else "")); box.add(title)
     if not tanks:
         box.add(Gtk.Label(label=err or "No reading yet", xalign=0)); box.show_all(); return box
     g = Gtk.Grid(column_spacing=8, row_spacing=4)
@@ -82,9 +83,19 @@ def tooltip_widget(tanks, when, err=None):
         f.set_size_request(48, -1); g.attach(f, 5, r, 1, 1)
     box.add(g); box.show_all(); return box
 
+TOOLTIP_CSS = b"""
+tooltip { background-color: #ffffff; border: 1px solid #bdbdbd; border-radius: 6px; color: #1e1e1e; padding: 2px; }
+tooltip * { color: #1e1e1e; }
+.inktip label { color: #1e1e1e; }
+.preview { background-color: #ffffff; }
+"""
+def install_css():
+    prov = Gtk.CssProvider(); prov.load_from_data(TOOLTIP_CSS)
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
 class Tray:
     def __init__(self):
-        Notify.init("Pro9000 ink")
+        install_css(); Notify.init("Pro9000 ink")
         self.icon = Gtk.StatusIcon(); self.icon.set_title("Pro9000 ink levels"); self.icon.set_visible(True)
         self.icon.connect("activate", self.open_viewer); self.icon.connect("popup-menu", self.popup)
         self.icon.set_has_tooltip(True); self.icon.connect("query-tooltip", self.query_tooltip)
@@ -143,7 +154,8 @@ if __name__ == "__main__":
         worst = "empty" if any(t["status"]=="empty" for t in tanks) else ("low" if any(t["status"]=="low" for t in tanks) else "ok")
         gauge_pixbuf(tanks, 88, worst).savev(sys.argv[2], "png", [], []); sys.exit(0)
     if len(sys.argv) > 2 and sys.argv[1] == "--tooltip-preview":
-        d = load(); w = Gtk.OffscreenWindow(); w.add(tooltip_widget(d.get("tanks", []), d.get("time"), d.get("error"))); w.show_all()
+        install_css(); d = load(); w = Gtk.OffscreenWindow(); wrap = Gtk.EventBox(); wrap.get_style_context().add_class("preview")
+        wrap.add(tooltip_widget(d.get("tanks", []), d.get("time"), d.get("error"))); w.add(wrap); w.show_all()
         def snap():
             pb = w.get_pixbuf(); pb.savev(sys.argv[2], "png", [], []); Gtk.main_quit(); return False
         GLib.timeout_add(800, snap); Gtk.main(); sys.exit(0)
