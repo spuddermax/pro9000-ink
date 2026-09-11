@@ -27,8 +27,13 @@ def load():
     return d or {"error": "Could not read the printer."}
 
 def printing():
-    try: return "Pro9000II-series-" in subprocess.run(["lpstat","-o"],capture_output=True,text=True,timeout=5).stdout
-    except Exception: return False
+    """True while it is unsafe to talk to the printer: a job is queued, or CUPS still
+    reports the printer processing (a cancelled job can keep it busy for a while)."""
+    try:
+        if "Pro9000II-series-" in subprocess.run(["lpstat","-o"],capture_output=True,text=True,timeout=5).stdout: return True
+        state = subprocess.run(["lpstat","-p","Pro9000II-series"],capture_output=True,text=True,timeout=5).stdout
+        return ("now printing" in state) or ("processing" in state)
+    except Exception: return True     # if CUPS won't answer, assume busy
 
 def gauge_pixbuf(tanks, size=22, worst="ok"):
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size); cr = cairo.Context(surf); s = size/22.0
