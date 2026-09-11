@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pro9000 Ink Tray
+Comment=Tray gauge and low-ink warnings for the Canon PIXMA Pro9000 Mark II
+Exec=@BIN@/pro9000-ink-tray
+Icon=printer
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-MATE-Autostart-Delay=15

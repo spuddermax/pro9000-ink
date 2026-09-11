@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+import gi, json, os, subprocess, time
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, Gdk, GLib
+import cairo
+
+def _sibling(name):
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    return here if os.path.exists(here) else os.path.expanduser("~/.local/bin/" + name)
+READER = _sibling("pro9000-ink-read")
+COLORS = {"PBK":(0.10,0.10,0.10),"C":(0.00,0.66,0.88),"M":(0.90,0.00,0.49),"Y":(1.00,0.83,0.00),
+          "LC":(0.56,0.84,0.94),"LM":(0.95,0.60,0.78),"R":(0.88,0.19,0.12),"G":(0.23,0.67,0.21)}
+CSS = b"""
+window { background: #f7f7f5; }
+.title { font-weight: 700; font-size: 15pt; }
+infobar label { color: #1e1e1e; }
+.subtitle { color: #6b6b6b; font-size: 9.5pt; }
+.name { font-weight: 600; font-size: 11pt; color: #1e1e1e; }
+.code { color: #7a7a7a; font-size: 9pt; font-family: monospace; }
+.pct { font-weight: 700; font-size: 11pt; color: #1e1e1e; }
+.chip { border-radius: 10px; padding: 2px 9px; font-size: 8.5pt; font-weight: 700; }
+.ok    { background: #dff3e4; color: #1d6b35; }
+.low   { background: #fff0cc; color: #8a5a00; }
+.empty { background: #fde0de; color: #a21c12; }
+.missing { background: #e8e8e8; color: #555; }
+.footer { color: #8a8a8a; font-size: 8.5pt; }
+"""
+
+def load():
+    for cmd in ([READER, "--json"], ["sudo", "-n", READER, "--json"]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout.strip()
+            d = json.loads(out) if out else {}
+        except Exception as e:
+            d = {"error": str(e)}
+        if "tanks" in d: return d
+        if d.get("error") and "permission" not in d["error"].lower(): return d
+    return d or {"error": "Could not read the printer."}
+
+def printing():
+    try: return "Pro9000II-series-" in subprocess.run(["lpstat","-o"],capture_output=True,text=True,timeout=5).stdout
+    except Exception: return False
+
+class Swatch(Gtk.DrawingArea):
+    def __init__(self, rgb):
+        super().__init__(); self.rgb = rgb; self.set_size_request(22, 22); self.connect("draw", self.draw)
+    def draw(self, w, cr):
+        a = w.get_allocation(); cr.arc(a.width/2, a.height/2, 9, 0, 6.2832); cr.set_source_rgb(*self.rgb); cr.fill()
+        cr.arc(a.width/2, a.height/2, 9, 0, 6.2832); cr.set_source_rgba(0,0,0,0.18); cr.set_line_width(1); cr.stroke()
+
+class Bar(Gtk.DrawingArea):
+    def __init__(self, rgb, level):
+        super().__init__(); self.rgb = rgb; self.level = level; self.set_size_request(240, 16); self.set_hexpand(True); self.connect("draw", self.draw)
+    def rr(self, cr, x, y, w, h, r):
+        cr.new_sub_path(); cr.arc(x+w-r, y+r, r, -1.5708, 0); cr.arc(x+w-r, y+h-r, r, 0, 1.5708)
+        cr.arc(x+r, y+h-r, r, 1.5708, 3.1416); cr.arc(x+r, y+r, r, 3.1416, 4.7124); cr.close_path()
+    def draw(self, w, cr):
+        a = w.get_allocation(); self.rr(cr, 0, 2, a.width, 12, 6); cr.set_source_rgb(0.90,0.90,0.89); cr.fill()
+        fw = max(0, a.width * self.level / 100.0)
+        if fw > 0: self.rr(cr, 0, 2, max(fw, 12), 12, 6); cr.set_source_rgb(*self.rgb); cr.fill()
+        for i in (25, 50, 75):
+            x = a.width * i / 100.0; cr.rectangle(x, 4, 1, 8); cr.set_source_rgba(1,1,1,0.55); cr.fill()
+
+class App(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="Pro9000 Mark II Ink")
+        self.set_default_size(520, 420); self.set_border_width(0)
+        prov = Gtk.CssProvider(); prov.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        hb = Gtk.HeaderBar(show_close_button=True); hb.props.title = "Canon PIXMA Pro9000 Mark II"; hb.props.subtitle = "Ink tank levels"
+        btn = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON); btn.set_tooltip_text("Read the printer again"); btn.connect("clicked", lambda *_: self.refresh()); hb.pack_end(btn)
+        self.set_titlebar(hb)
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=18); self.add(self.box)
+        self.connect("key-press-event", lambda w,e: self.close() if e.keyval == Gdk.KEY_Escape else None)
+        self.refresh()
+    def clear(self):
+        for c in self.box.get_children(): self.box.remove(c)
+    def note(self, text, kind="info"):
+        bar = Gtk.InfoBar(); bar.set_message_type(Gtk.MessageType.WARNING if kind=="warn" else Gtk.MessageType.ERROR)
+        l = Gtk.Label(label=text, wrap=True, xalign=0); bar.get_content_area().add(l); self.box.pack_start(bar, False, False, 0)
+    def refresh(self):
+        self.clear()
+        if printing():
+            self.note("A job is printing. The reader needs the USB port to itself; try again when the printer is idle.", "warn"); self.show_all(); return
+        d = load()
+        if "error" in d: self.note(d["error"], "error"); self.show_all(); return
+        grid = Gtk.Grid(column_spacing=14, row_spacing=10); self.box.pack_start(grid, False, False, 0)
+        for r, t in enumerate(d["tanks"]):
+            rgb = COLORS.get(t["key"], (0.5,0.5,0.5))
+            grid.attach(Swatch(rgb), 0, r, 1, 1)
+            names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL); n = Gtk.Label(label=t["name"], xalign=0); n.get_style_context().add_class("name")
+            c = Gtk.Label(label=t["code"], xalign=0); c.get_style_context().add_class("code"); names.add(n); names.add(c); names.set_size_request(150, -1)
+            grid.attach(names, 1, r, 1, 1)
+            grid.attach(Bar(rgb, t["level"]), 2, r, 1, 1)
+            p = Gtk.Label(label=f"{t['level']}%", xalign=1); p.get_style_context().add_class("pct"); p.set_size_request(48, -1); grid.attach(p, 3, r, 1, 1)
+            s = Gtk.Label(label={"ok":"OK","low":"LOW","empty":"EMPTY","missing":"MISSING"}.get(t["status"], t["status"].upper()))
+            s.get_style_context().add_class("chip"); s.get_style_context().add_class(t["status"] if t["status"] in ("ok","low","empty","missing") else "missing"); grid.attach(s, 4, r, 1, 1)
+        low = [t["name"] for t in d["tanks"] if t["status"] in ("low","empty")]
+        f = Gtk.Label(label=f"Read from the printer at {d['time']}." + (f"  Needs attention: {', '.join(low)}." if low else "") + "  Red and green are never used by the Linux driver.", xalign=0, wrap=True)
+        f.get_style_context().add_class("footer"); self.box.pack_end(f, False, False, 4)
+        self.show_all()
+
+if __name__ == "__main__":
+    import sys
+    w = App(); w.connect("destroy", Gtk.main_quit); w.show_all()
+    if len(sys.argv) > 2 and sys.argv[1] == "--screenshot":
+        def snap():
+            gw = w.get_window(); a = w.get_allocation()
+            pb = Gdk.pixbuf_get_from_window(gw, 0, 0, a.width, a.height); pb.savev(sys.argv[2], "png", [], []); Gtk.main_quit(); return False
+        GLib.timeout_add(1500, snap)
+    Gtk.main()

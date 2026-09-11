@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Pro9000 Ink Levels
+Comment=Ink tank levels for the Canon PIXMA Pro9000 Mark II
+Exec=@BIN@/pro9000-ink-gui
+Icon=printer
+Terminal=false
+Categories=Utility;Settings;HardwareSettings;

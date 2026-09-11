@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Read all eight ink tanks of a Canon Pro9000 Mk II over USB via the BJL status query.
+Usage: pro9000-ink-read [--json]"""
+import glob, json, os, re, select, struct, sys, time
+ORDER = ["PBK","C","M","Y","LC","LM","R","G"]
+NAMES = {"PBK":"Black","C":"Cyan","M":"Magenta","Y":"Yellow","LC":"Photo Cyan","LM":"Photo Magenta","R":"Red","G":"Green"}
+CODES = {"PBK":"CLI-8BK","C":"CLI-8C","M":"CLI-8M","Y":"CLI-8Y","LC":"CLI-8PC","LM":"CLI-8PM","R":"CLI-8R","G":"CLI-8G"}
+FLAGS = {"SET":"ok","LOW":"low","IO":"empty","NON":"missing"}
+def query(dev):
+    data = b"SSR=BST,SFA,CHD,CIL,CIR,HRI,DBS,DWS,DOC,DSC,DJS,CTK,HCF;"
+    body = b"\x00\x1e" + struct.pack(">H", len(data)+2) + data
+    cmd  = b"\x1b[K" + struct.pack("<H", len(body)) + body
+    fd = os.open(dev, os.O_RDWR | os.O_NONBLOCK); os.write(fd, cmd); time.sleep(0.5); out = b""
+    for _ in range(10):
+        r,_,_ = select.select([fd],[],[],0.5)
+        if not r: break
+        try: chunk = os.read(fd, 4096)
+        except BlockingIOError: break
+        if not chunk: break
+        out += chunk
+        if b"CIR:" in out: break
+    os.close(fd); return out.decode("latin1")
+def read():
+    devs = sorted(glob.glob("/dev/usb/lp*"))
+    if not devs: raise RuntimeError("No USB printer device found. Is the printer on and plugged in?")
+    reply = ""
+    for d in devs:
+        try: reply = query(d)
+        except PermissionError: raise RuntimeError("PERMISSION")
+        except OSError: continue
+        if "CIR:" in reply: break
+    m = re.search(r"CIR:([^;]*);", reply); f = re.search(r"CTK:([^;]*);", reply)
+    if not m: raise RuntimeError("The printer did not return ink data. It may be busy or asleep.")
+    levels = dict(kv.split("=") for kv in m.group(1).split(","))
+    flags = {}
+    if f:
+        toks = [t for t in f.group(1).split(",") if t != "/"]
+        flags = {toks[i]: toks[i+1] for i in range(0, len(toks)-1, 2)}
+    return [{"key":k,"name":NAMES[k],"code":CODES[k],"level":int(levels[k]),"status":FLAGS.get(flags.get(k,""),flags.get(k,"?"))} for k in ORDER if k in levels]
+if __name__ == "__main__":
+    try: tanks = read()
+    except RuntimeError as e:
+        msg = "No permission on /dev/usb/lp* (need lp group or sudo)" if str(e)=="PERMISSION" else str(e)
+        if "--json" in sys.argv: print(json.dumps({"error": msg}))
+        else: print(msg, file=sys.stderr)
+        sys.exit(2)
+    if "--json" in sys.argv: print(json.dumps({"tanks": tanks, "time": time.strftime("%H:%M")}))
+    else:
+        print(f"{'Tank':<16}{'Code':<10}{'Level':>6}   Status")
+        for t in tanks: print(f"{t['name']:<16}{t['code']:<10}{t['level']:>5}%   {t['status'].upper() if t['status']!='ok' else 'ok'}")
