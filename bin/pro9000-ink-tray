@@ -45,15 +45,55 @@ def gauge_pixbuf(tanks, size=22, worst="ok"):
         cr.arc(size-5*s, size-5*s, 3.2*s, 0, 6.2832); cr.set_source_rgb(*STATUS_RGB[worst]); cr.fill()
     surf.flush(); return Gdk.pixbuf_get_from_surface(surf, 0, 0, size, size)
 
+class Swatch(Gtk.DrawingArea):
+    def __init__(self, rgb):
+        super().__init__(); self.rgb = rgb; self.set_size_request(16, 16); self.connect("draw", self.draw)
+    def draw(self, w, cr):
+        a = w.get_allocation(); cr.arc(a.width/2, a.height/2, 6, 0, 6.2832); cr.set_source_rgb(*self.rgb); cr.fill()
+        cr.arc(a.width/2, a.height/2, 6, 0, 6.2832); cr.set_source_rgba(1,1,1,0.45); cr.set_line_width(1); cr.stroke()
+
+class Bar(Gtk.DrawingArea):
+    def __init__(self, rgb, level):
+        super().__init__(); self.rgb = rgb; self.level = level; self.set_size_request(150, 12); self.connect("draw", self.draw)
+    def rr(self, cr, x, y, w, h, r):
+        cr.new_sub_path(); cr.arc(x+w-r, y+r, r, -1.5708, 0); cr.arc(x+w-r, y+h-r, r, 0, 1.5708)
+        cr.arc(x+r, y+h-r, r, 1.5708, 3.1416); cr.arc(x+r, y+r, r, 3.1416, 4.7124); cr.close_path()
+    def draw(self, w, cr):
+        a = w.get_allocation(); self.rr(cr, 0, 2, a.width, 9, 4.5); cr.set_source_rgba(0.5,0.5,0.5,0.28); cr.fill()
+        fw = a.width * max(self.level,0) / 100.0
+        if fw > 0: self.rr(cr, 0, 2, max(fw, 9), 9, 4.5); cr.set_source_rgb(*self.rgb); cr.fill()
+
+def tooltip_widget(tanks, when, err=None):
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=6)
+    title = Gtk.Label(xalign=0); title.set_markup("<b>Pro9000 Mark II ink</b>" + (f"  <small>read {when}</small>" if when else "")); box.add(title)
+    if not tanks:
+        box.add(Gtk.Label(label=err or "No reading yet", xalign=0)); box.show_all(); return box
+    g = Gtk.Grid(column_spacing=8, row_spacing=4)
+    for r, t in enumerate(tanks):
+        rgb = COLORS.get(t["key"], (0.5,0.5,0.5))
+        g.attach(Swatch(rgb), 0, r, 1, 1)
+        n = Gtk.Label(label=t["name"], xalign=0); n.set_size_request(104, -1); g.attach(n, 1, r, 1, 1)
+        c = Gtk.Label(xalign=0); c.set_markup(f"<tt><small>{t['code']}</small></tt>"); c.set_size_request(64, -1); g.attach(c, 2, r, 1, 1)
+        g.attach(Bar(rgb, t["level"]), 3, r, 1, 1)
+        p = Gtk.Label(xalign=1); p.set_markup(f"<tt>{t['level']:>3}%</tt>"); g.attach(p, 4, r, 1, 1)
+        f = Gtk.Label(xalign=0); st = t["status"]
+        if st in ("low","empty"):
+            col = "#b25a00" if st=="low" else "#b3261e"; f.set_markup(f"<b><span foreground='{col}'>{st.upper()}</span></b>")
+        f.set_size_request(48, -1); g.attach(f, 5, r, 1, 1)
+    box.add(g); box.show_all(); return box
+
 class Tray:
     def __init__(self):
         Notify.init("Pro9000 ink")
         self.icon = Gtk.StatusIcon(); self.icon.set_title("Pro9000 ink levels"); self.icon.set_visible(True)
         self.icon.connect("activate", self.open_viewer); self.icon.connect("popup-menu", self.popup)
+        self.icon.set_has_tooltip(True); self.icon.connect("query-tooltip", self.query_tooltip)
         self.tanks = []; self.err = None; self.when = None
         self.prev = self.load_state()
-        self.icon.set_from_pixbuf(gauge_pixbuf([])); self.icon.set_tooltip_text("Pro9000 ink levels: reading…")
+        self.icon.set_from_pixbuf(gauge_pixbuf([]))
         GLib.timeout_add_seconds(5, self.poll)
+    def query_tooltip(self, icon, x, y, kb, tip):
+        tip.set_custom(tooltip_widget(self.tanks, self.when, self.err)); return True
     def load_state(self):
         try: return json.load(open(STATE))
         except Exception: return {}
@@ -62,17 +102,14 @@ class Tray:
         except Exception: pass
     def poll(self):
         if printing():
-            self.icon.set_tooltip_text("Pro9000 ink levels: printer busy, will re-check shortly"); GLib.timeout_add_seconds(RETRY_MIN*60, self.poll); return False
+            self.err = "Printer busy - will re-check shortly"; GLib.timeout_add_seconds(RETRY_MIN*60, self.poll); return False
         d = load()
         if "error" in d:
-            self.err = d["error"]; self.icon.set_from_pixbuf(gauge_pixbuf([])); self.icon.set_tooltip_text("Pro9000 ink levels: " + self.err)
+            self.err = d["error"]; self.icon.set_from_pixbuf(gauge_pixbuf([]))
             GLib.timeout_add_seconds(RETRY_MIN*60, self.poll); return False
         self.err = None; self.tanks = d["tanks"]; self.when = d["time"]
         worst = "empty" if any(t["status"]=="empty" for t in self.tanks) else ("low" if any(t["status"]=="low" for t in self.tanks) else "ok")
         self.icon.set_from_pixbuf(gauge_pixbuf(self.tanks, 22, worst))
-        rows = [f"{t['name']:<14} {t['code']:<8} {t['level']:>3}%  {t['status'].upper() if t['status']!='ok' else ''}".rstrip() for t in self.tanks]
-        body = GLib.markup_escape_text("\n".join(rows))
-        self.icon.set_tooltip_markup(f"<b>Pro9000 Mark II ink</b>  <small>read {self.when}</small>\n<tt>{body}</tt>")
         self.notify_changes(); GLib.timeout_add_seconds(POLL_MIN*60, self.poll); return False
     def notify_changes(self):
         cur = {t["key"]: t["status"] for t in self.tanks}; first = not self.prev
@@ -105,4 +142,9 @@ if __name__ == "__main__":
         d = load(); tanks = d.get("tanks", [])
         worst = "empty" if any(t["status"]=="empty" for t in tanks) else ("low" if any(t["status"]=="low" for t in tanks) else "ok")
         gauge_pixbuf(tanks, 88, worst).savev(sys.argv[2], "png", [], []); sys.exit(0)
+    if len(sys.argv) > 2 and sys.argv[1] == "--tooltip-preview":
+        d = load(); w = Gtk.OffscreenWindow(); w.add(tooltip_widget(d.get("tanks", []), d.get("time"), d.get("error"))); w.show_all()
+        def snap():
+            pb = w.get_pixbuf(); pb.savev(sys.argv[2], "png", [], []); Gtk.main_quit(); return False
+        GLib.timeout_add(800, snap); Gtk.main(); sys.exit(0)
     Tray(); Gtk.main()
