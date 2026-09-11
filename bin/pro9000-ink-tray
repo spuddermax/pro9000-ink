@@ -70,7 +70,9 @@ class Tray:
         self.err = None; self.tanks = d["tanks"]; self.when = d["time"]
         worst = "empty" if any(t["status"]=="empty" for t in self.tanks) else ("low" if any(t["status"]=="low" for t in self.tanks) else "ok")
         self.icon.set_from_pixbuf(gauge_pixbuf(self.tanks, 22, worst))
-        self.icon.set_tooltip_text("Pro9000 ink (" + self.when + ")\n" + "\n".join(f"{t['name']:<14}{t['code']:<9}{t['level']:>4}%  {t['status'].upper() if t['status']!='ok' else ''}".rstrip() for t in self.tanks))
+        rows = [f"{t['name']:<14} {t['code']:<8} {t['level']:>3}%  {t['status'].upper() if t['status']!='ok' else ''}".rstrip() for t in self.tanks]
+        body = GLib.markup_escape_text("\n".join(rows))
+        self.icon.set_tooltip_markup(f"<b>Pro9000 Mark II ink</b>  <small>read {self.when}</small>\n<tt>{body}</tt>")
         self.notify_changes(); GLib.timeout_add_seconds(POLL_MIN*60, self.poll); return False
     def notify_changes(self):
         cur = {t["key"]: t["status"] for t in self.tanks}; first = not self.prev
